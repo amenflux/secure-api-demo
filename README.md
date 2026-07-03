@@ -65,18 +65,26 @@ None of these unlock a real corporate integration — the real production paths
 in the scripts stay commented out. The only effect of setting them is to
 change the values the demo path exports to `$GITHUB_ENV`.
 
-## How to run
+## How to inspect a run
+
+Every past run of this pipeline is public. Anyone can read the full log and
+download the artifacts without a GitHub account.
 
 1. Open the **Actions** tab.
-2. Select the workflow **"QA Agent — Caller (click 'Run workflow' to launch
-   the demo)"**.
-3. Click **Run workflow**. Pick an `auth_type` if you want (default
-   `service-credentials` exercises the real `/login` round-trip).
-4. Watch the pipeline. End-to-end run time is ~90–120s. All produced files
-   land on the run's **Artifacts** panel: `reports/report.json`,
-   `reports/report.html`, `reports/report_summary.html`,
+2. Select the workflow **"QA Agent — Caller"** in the left sidebar.
+3. Click the most recent green run at the top of the list.
+4. Read any step to see its full log — including the 15-second DEMO banner,
+   the real Docker Compose build + startup, the real Newman execution against
+   `http://localhost:8000`, and the summary output.
+5. Scroll to the **Artifacts** panel at the bottom to download the produced
+   files: `reports/report.json`, `reports/report.html`,
+   `reports/report_summary.html`,
    `qa/collections/generated.postman_collection.json`,
    `qa/artifacts/openapi.json`.
+
+Triggering a fresh run manually requires write access to this repository,
+which by GitHub's security policy is limited to me. If you would like to see
+a fresh execution, open an issue or reach out and I will kick one off.
 
 ## What you'll see in the workflow log
 

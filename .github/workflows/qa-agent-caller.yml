@@ -1,4 +1,4 @@
-name: QA Agent — Caller (click 'Run workflow' to launch the demo)
+name: QA Agent — Caller
 
 # Caller workflow — invokes the reusable QA Agent workflow with the same
 # input shape a real consumer repository would use. In production the caller
