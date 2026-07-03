@@ -1,0 +1,10 @@
+{
+  "name": "qa-agent-newman",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Newman + reporter for the QA Agent Postman collection execution.",
+  "dependencies": {
+    "newman": "^6.2.1",
+    "newman-reporter-html": "^1.0.5"
+  }
+}

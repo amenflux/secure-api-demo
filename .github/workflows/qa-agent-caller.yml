@@ -1,0 +1,30 @@
+name: QA Agent — Caller (click 'Run workflow' to launch the demo)
+
+# Caller workflow — invokes the reusable QA Agent workflow with the same
+# input shape a real consumer repository would use. In production the caller
+# lives in the product repository and the reusable lives centrally, pinned
+# via semver tag. Here both live in the same repo for the public demo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      auth_type:
+        description: 'Which auth strategy to demonstrate'
+        required: true
+        type: choice
+        default: 'service-credentials'
+        options:
+          - none
+          - api-key
+          - oauth-client-credentials
+          - service-credentials
+          - custom
+
+jobs:
+  qa:
+    uses: ./.github/workflows/qa-agent-reusable.yml
+    with:
+      AUTH_TYPE: ${{ inputs.auth_type }}
+      ENVIRONMENT_NAME: 'dev'
+      CENTRIFY_BUNDLE_NAME: 'secureapi-team-bundle'
+      NOTIFY_EMAILS: ''

@@ -1,0 +1,13 @@
+services:
+  secure-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_CLIENT_ID: ${APP_CLIENT_ID:-demo-client}
+      APP_CLIENT_SECRET: ${APP_CLIENT_SECRET:-demo-secret}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

@@ -1,0 +1,204 @@
+name: QA Agent — Reusable
+
+# Reusable workflow — runs the full test-generation + Newman execution pipeline
+# against a target service. In production this reusable lives centrally and is
+# pinned by semver from consumer repos; here both caller and reusable live in
+# the same repo so anyone can inspect the wiring end-to-end.
+#
+# Every external integration this workflow drives has TWO layers in the Python
+# scripts under qa/scripts/:
+#   (a) the real production HTTP shape preserved verbatim as a comment block, and
+#   (b) a working demo path that reads a GitHub secret (see env: blocks below)
+#       or falls back to a hardcoded placeholder so the run completes with no
+#       secrets configured.
+
+on:
+  workflow_call:
+    inputs:
+      AUTH_TYPE:
+        required: true
+        type: string
+        description: 'one of: none / api-key / oauth-client-credentials / service-credentials / custom'
+      ENVIRONMENT_NAME:
+        required: true
+        type: string
+      CENTRIFY_BUNDLE_NAME:
+        required: true
+        type: string
+      NOTIFY_EMAILS:
+        type: string
+        default: ''
+      NOTIFY_CC_EMAILS:
+        type: string
+        default: ''
+
+jobs:
+  qa-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: DEMO REPOSITORY banner (15s hold)
+        shell: bash
+        run: |
+          echo "::warning title=DEMO REPOSITORY::This is a public demonstration authored by Amen Bouteraa. Nothing in this run is a real corporate integration."
+          cat <<'EOF'
+
+          ================================================================
+          | DEMO REPOSITORY                                                |
+          |                                                                |
+          | This workflow is a public replica of a pattern originally      |
+          | built for Procter & Gamble's Automation team. The real         |
+          | pipeline's product names, secret names, internal tool          |
+          | identifiers, LLM model names, and vault names are              |
+          | confidential and are NOT reproduced here.                      |
+          |                                                                |
+          | Every step that reads a "vault" in this run actually reads     |
+          | from a GitHub secret (DEMO_TEAM_BUNDLE_JSON,                   |
+          | DEMO_PLATFORM_BUNDLE_JSON, DEMO_CENTRIFY_CREDS_JSON) if the    |
+          | secret is configured on this repository, or from a hardcoded   |
+          | placeholder value otherwise. Every Python script under         |
+          | qa/scripts/ keeps the REAL production HTTP call preserved      |
+          | verbatim inside a triple-quoted comment block for              |
+          | inspection — the demo path runs underneath.                    |
+          |                                                                |
+          | Everything else in this workflow is real: Docker Compose       |
+          | actually builds and starts the FastAPI app, Newman actually    |
+          | runs against http://localhost:8000, JUnit/Newman JSON is       |
+          | actually parsed.                                               |
+          ================================================================
+          EOF
+          for i in 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1; do
+            echo "Starting demo in ${i}s..."
+            sleep 1
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: qa/requirements.txt
+
+      - name: Install script dependencies
+        run: pip install --quiet -r qa/requirements.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: qa/package.json
+
+      - name: Install Newman
+        working-directory: qa
+        run: npm install --legacy-peer-deps
+
+      - name: Add Newman to PATH
+        run: echo "$GITHUB_WORKSPACE/qa/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Build and start the target service (docker compose)
+        run: |
+          docker compose up --build -d
+          echo "Waiting for /health to return 200..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null; then
+              echo "Service is up after ${i} attempt(s)."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Service did not become healthy within 60s."
+          docker compose logs
+          exit 1
+
+      - name: Decrypt vault credentials
+        env:
+          DEMO_CENTRIFY_CREDS_JSON: ${{ secrets.DEMO_CENTRIFY_CREDS_JSON }}
+        run: python qa/scripts/decrypt_secrets.py
+
+      - name: Fetch team bundle from Centrify
+        env:
+          CENTRIFY_BUNDLE_NAME: ${{ inputs.CENTRIFY_BUNDLE_NAME }}
+          AUTH_TYPE: ${{ inputs.AUTH_TYPE }}
+          DEMO_TEAM_BUNDLE_JSON: ${{ secrets.DEMO_TEAM_BUNDLE_JSON }}
+        run: python qa/scripts/fetch_team_bundle.py
+
+      - name: Wait for target service to be reachable at DEV_API_URL
+        run: |
+          URL="${DEV_API_URL}${OPENAPI_PATH}"
+          echo "Probing ${URL}..."
+          for i in $(seq 1 10); do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 5 "${URL}" || echo "000")
+            if [ "${code}" != "000" ]; then
+              echo "Alive (HTTP ${code}) after ${i} attempt(s)."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::Service did not become reachable at ${URL}."
+          exit 1
+
+      - name: Prepare auth header
+        env:
+          AUTH_TYPE: ${{ inputs.AUTH_TYPE }}
+        run: python qa/scripts/prepare_auth_header.py
+
+      - name: Fetch live OpenAPI spec
+        run: python qa/scripts/fetch_openapi.py
+
+      - name: Fetch platform LLM bundle from Centrify
+        env:
+          DEMO_PLATFORM_BUNDLE_JSON: ${{ secrets.DEMO_PLATFORM_BUNDLE_JSON }}
+        run: python qa/scripts/fetch_platform_bundle.py
+
+      - name: Generate Postman collection
+        run: python qa/scripts/generate_tests.py
+
+      - name: Run Postman collection with Newman
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          AUTH_HEADER_VALUE=$(echo "$AUTH_HEADER" | cut -d':' -f2- | sed 's/^ *//')
+          newman run qa/collections/generated.postman_collection.json \
+            --env-var "base_url=${DEV_API_URL}" \
+            --env-var "auth_header_value=${AUTH_HEADER_VALUE}" \
+            --env-var "test_client_id=${TEST_SP_CLIENT_ID:-}" \
+            --env-var "test_client_secret=${TEST_SP_CLIENT_SECRET:-}" \
+            --reporters cli,json,html \
+            --reporter-json-export reports/report.json \
+            --reporter-html-export reports/report.html
+
+      - name: Summarize Newman results
+        if: always()
+        env:
+          ENVIRONMENT_NAME: ${{ inputs.ENVIRONMENT_NAME }}
+        run: python qa/scripts/summarize_newman.py
+
+      - name: Upload collection to Postman workspace
+        if: always()
+        run: python qa/scripts/upload_to_postman.py
+
+      - name: Send email notification
+        if: always()
+        env:
+          NOTIFY_EMAILS: ${{ inputs.NOTIFY_EMAILS }}
+          NOTIFY_CC: ${{ inputs.NOTIFY_CC_EMAILS }}
+          ENVIRONMENT_NAME: ${{ inputs.ENVIRONMENT_NAME }}
+        run: python qa/scripts/send_email.py
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-agent-run-${{ github.run_number }}
+          path: |
+            reports/**
+            qa/collections/**
+            qa/artifacts/**
+          retention-days: 14
+
+      - name: Stop docker compose
+        if: always()
+        run: docker compose down --remove-orphans
